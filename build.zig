@@ -232,7 +232,8 @@ fn addModuleTest(
 /// 根据目标平台设置不同的编译标志：
 /// - Android：启用 AAudio 和 OpenSL ES 后端支持
 fn addMiniaudioCSources(b: *std.Build, mod: *std.Build.Module, target: std.Build.ResolvedTarget) void {
-    const flags = if (target.result.os.tag == .android)
+    const is_android = target.result.abi == .android or target.result.abi == .androideabi;
+    const flags = if (is_android)
         &.{
             "-DMA_SUPPORT_AAUDIO=1",
             "-DMA_SUPPORT_OPENSL=1",
@@ -313,27 +314,25 @@ fn getAndroidNdkSysroot(b: *std.Build) ?[]const u8 {
 ///   - AudioToolbox：高级音频工具箱（编解码、格式转换等）
 ///   - CoreFoundation：基础框架，提供数据类型和运行时支持
 fn linkPlatformLibs(b: *std.Build, mod: *std.Build.Module, target: std.Build.ResolvedTarget) void {
+    const is_android = target.result.abi == .android or target.result.abi == .androideabi;
+
     switch (target.result.os.tag) {
         .linux => {
-            mod.linkSystemLibrary("pthread", .{});
-            mod.linkSystemLibrary("m", .{});
-            mod.linkSystemLibrary("dl", .{});
-        },
-        .android => {
-            if (getAndroidNdkSysroot(b)) |sysroot| {
-                mod.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ sysroot, "usr/include" }) });
-                if (getAndroidArchName(target)) |arch| {
-                    mod.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sysroot, "usr/lib", arch }) });
+            if (is_android) {
+                if (getAndroidNdkSysroot(b)) |sysroot| {
+                    mod.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ sysroot, "usr/include" }) });
+                    if (getAndroidArchName(target)) |arch| {
+                        mod.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sysroot, "usr/lib", arch }) });
+                    }
+                    mod.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sysroot, "usr/lib" }) });
                 }
-                mod.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sysroot, "usr/lib" }) });
+                mod.linkSystemLibrary("log", .{});
+                mod.linkSystemLibrary("OpenSLES", .{});
+                mod.linkSystemLibrary("aaudio", .{});
             }
-
             mod.linkSystemLibrary("pthread", .{});
             mod.linkSystemLibrary("m", .{});
             mod.linkSystemLibrary("dl", .{});
-            mod.linkSystemLibrary("log", .{});
-            mod.linkSystemLibrary("OpenSLES", .{});
-            mod.linkSystemLibrary("aaudio", .{});
         },
         .windows => {
             mod.linkSystemLibrary("winmm", .{});

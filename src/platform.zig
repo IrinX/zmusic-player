@@ -42,7 +42,7 @@ pub const AndroidLogLevel = enum(u32) {
 ///   `level` - 日志级别
 ///   `msg`   - 日志消息（必须以 null 结尾）
 pub fn androidLog(tag: [*:0]const u8, level: AndroidLogLevel, msg: [*:0]const u8) void {
-    if (builtin.os.tag != .android) return;
+    if (builtin.abi != .android and builtin.abi != .androideabi) return;
 
     const __android_log_write = @extern(
         *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.c) i32,
@@ -54,7 +54,7 @@ pub fn androidLog(tag: [*:0]const u8, level: AndroidLogLevel, msg: [*:0]const u8
 
 /// Android 日志宏包装（接受非 null 结尾的字符串）
 pub fn logDebug(allocator: std.mem.Allocator, tag: []const u8, msg: []const u8) void {
-    if (builtin.os.tag != .android) return;
+    if (builtin.abi != .android and builtin.abi != .androideabi) return;
     const tag_z = allocator.dupeZ(u8, tag) catch return;
     defer allocator.free(tag_z);
     const msg_z = allocator.dupeZ(u8, msg) catch return;
@@ -63,7 +63,7 @@ pub fn logDebug(allocator: std.mem.Allocator, tag: []const u8, msg: []const u8) 
 }
 
 pub fn logInfo(allocator: std.mem.Allocator, tag: []const u8, msg: []const u8) void {
-    if (builtin.os.tag != .android) return;
+    if (builtin.abi != .android and builtin.abi != .androideabi) return;
     const tag_z = allocator.dupeZ(u8, tag) catch return;
     defer allocator.free(tag_z);
     const msg_z = allocator.dupeZ(u8, msg) catch return;
@@ -72,7 +72,7 @@ pub fn logInfo(allocator: std.mem.Allocator, tag: []const u8, msg: []const u8) v
 }
 
 pub fn logWarn(allocator: std.mem.Allocator, tag: []const u8, msg: []const u8) void {
-    if (builtin.os.tag != .android) return;
+    if (builtin.abi != .android and builtin.abi != .androideabi) return;
     const tag_z = allocator.dupeZ(u8, tag) catch return;
     defer allocator.free(tag_z);
     const msg_z = allocator.dupeZ(u8, msg) catch return;
@@ -81,7 +81,7 @@ pub fn logWarn(allocator: std.mem.Allocator, tag: []const u8, msg: []const u8) v
 }
 
 pub fn logError(allocator: std.mem.Allocator, tag: []const u8, msg: []const u8) void {
-    if (builtin.os.tag != .android) return;
+    if (builtin.abi != .android and builtin.abi != .androideabi) return;
     const tag_z = allocator.dupeZ(u8, tag) catch return;
     defer allocator.free(tag_z);
     const msg_z = allocator.dupeZ(u8, msg) catch return;
