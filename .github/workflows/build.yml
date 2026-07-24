@@ -19,6 +19,10 @@ jobs:
             target: aarch64-macos
           - os: macos-15
             target: x86_64-macos
+          - os: ubuntu-latest
+            target: aarch64-android
+          - os: ubuntu-latest
+            target: arm-linux-androideabi
 
     runs-on: ${{ matrix.os }}
 
@@ -33,11 +37,22 @@ jobs:
         if: runner.os == 'macOS'
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
+      - name: Install Android NDK
+        if: contains(matrix.target, 'android')
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26b
+          add-to-path: true
+
       - name: Build
         run: zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseSmall
+        env:
+          ANDROID_NDK_HOME: ${{ env.NDK_HOME }}
 
       - name: Test
         run: zig build test -Dtarget=${{ matrix.target }} -Doptimize=ReleaseSmall
+        env:
+          ANDROID_NDK_HOME: ${{ env.NDK_HOME }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7

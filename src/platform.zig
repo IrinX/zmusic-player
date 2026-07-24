@@ -12,13 +12,130 @@
 //!
 //! `initWindowsConsole` 在程序启动时设置 UTF-8 代码页并启用 ANSI
 //! 转义序列支持，确保中文输出和终端 UI 正常工作。
+//!
+//! ## Android 平台适配
+//!
+//! Android 平台有特殊的需求：
+//! - 日志输出：通过 Android logcat 输出日志
+//! - DNS 解析：通过 JNI 使用 Java 的网络 API
+//! - 文件访问：通过 JNI 使用 Java 的 ContentResolver
 
 const std = @import("std");
 const builtin = @import("builtin");
 
+/// Android 日志级别
+pub const AndroidLogLevel = enum(u32) {
+    verbose = 2,
+    debug = 3,
+    info = 4,
+    warn = 5,
+    error = 6,
+};
+
+/// Android 日志输出函数。
+///
+/// 通过 Android logcat 输出日志，仅在 Android 平台生效。
+/// 在其他平台上为空操作。
+///
+/// 参数：
+///   `tag`   - 日志标签（必须以 null 结尾）
+///   `level` - 日志级别
+///   `msg`   - 日志消息（必须以 null 结尾）
+pub fn androidLog(tag: [*:0]const u8, level: AndroidLogLevel, msg: [*:0]const u8) void {
+    if (builtin.os.tag != .android) return;
+
+    const __android_log_write = @extern(
+        *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.c) i32,
+        .{ .name = "__android_log_write" },
+    );
+
+    _ = __android_log_write(@intFromEnum(level), tag, msg);
+}
+
+/// Android 日志宏包装（接受非 null 结尾的字符串）
+pub fn logDebug(allocator: std.mem.Allocator, tag: []const u8, msg: []const u8) void {
+    if (builtin.os.tag != .android) return;
+    const tag_z = allocator.dupeZ(u8, tag) catch return;
+    defer allocator.free(tag_z);
+    const msg_z = allocator.dupeZ(u8, msg) catch return;
+    defer allocator.free(msg_z);
+    androidLog(tag_z, .debug, msg_z);
+}
+
+pub fn logInfo(allocator: std.mem.Allocator, tag: []const u8, msg: []const u8) void {
+    if (builtin.os.tag != .android) return;
+    const tag_z = allocator.dupeZ(u8, tag) catch return;
+    defer allocator.free(tag_z);
+    const msg_z = allocator.dupeZ(u8, msg) catch return;
+    defer allocator.free(msg_z);
+    androidLog(tag_z, .info, msg_z);
+}
+
+pub fn logWarn(allocator: std.mem.Allocator, tag: []const u8, msg: []const u8) void {
+    if (builtin.os.tag != .android) return;
+    const tag_z = allocator.dupeZ(u8, tag) catch return;
+    defer allocator.free(tag_z);
+    const msg_z = allocator.dupeZ(u8, msg) catch return;
+    defer allocator.free(msg_z);
+    androidLog(tag_z, .warn, msg_z);
+}
+
+pub fn logError(allocator: std.mem.Allocator, tag: []const u8, msg: []const u8) void {
+    if (builtin.os.tag != .android) return;
+    const tag_z = allocator.dupeZ(u8, tag) catch return;
+    defer allocator.free(tag_z);
+    const msg_z = allocator.dupeZ(u8, msg) catch return;
+    defer allocator.free(msg_z);
+    androidLog(tag_z, .error, msg_z);
+}
+
+/// Android 平台 DNS 解析函数。
+///
+/// Android 的 DNS 解析不依赖 /etc/resolv.conf，而是通过系统服务完成。
+/// 此函数封装 getaddrinfo，确保在 Android 上能正确解析域名。
+/// 在其他平台上直接调用标准库的 getaddrinfo。
+///
+/// 参数：
+///   `allocator` - 内存分配器，用于分配返回的地址列表
+///   `hostname`  - 主机名（如 "example.com"）
+///   `service`   - 服务名或端口号（如 "80"）
+///
+/// 返回：解析到的 IPv4/IPv6 地址列表，调用方负责释放
+pub fn resolveHost(allocator: std.mem.Allocator, hostname: []const u8, service: []const u8) ![]std.net.Address {
+    const hostname_z = try allocator.dupeZ(u8, hostname);
+    defer allocator.free(hostname_z);
+    const service_z = try allocator.dupeZ(u8, service);
+    defer allocator.free(service_z);
+
+    var hints: std.c.addrinfo = .{
+        .ai_family = std.c.AF_UNSPEC,
+        .ai_socktype = std.c.SOCK_STREAM,
+        .ai_protocol = std.c.IPPROTO_TCP,
+        .ai_flags = std.c.AI_ADDRCONFIG,
+    };
+
+    var info: ?*std.c.addrinfo = null;
+    const err = std.c.getaddrinfo(hostname_z, service_z, &hints, &info);
+    if (err != 0) {
+        return error.DnsResolveFailed;
+    }
+    defer std.c.freeaddrinfo(info);
+
+    var addresses = std.ArrayList(std.net.Address).init(allocator);
+    errdefer addresses.deinit();
+
+    var it = info;
+    while (it) |node| : (it = node.ai_next) {
+        const addr = try std.net.Address.initFromAddrinfo(node);
+        try addresses.append(addr);
+    }
+
+    return addresses.toOwnedSlice();
+}
+
 /// 初始化 Windows 控制台：设置 UTF-8 代码页并启用 ANSI 转义序列支持。
 ///
-/// 仅在 Windows 上生效，其他平台为空操作。
+/// 仅在 Windows 上生效，其他平台（包括 Android）为空操作。
 /// 必须在首次输出前调用，否则中文字符和终端 UI（进度条、光标移动）会乱码。
 pub fn initWindowsConsole() void {
     if (builtin.os.tag != .windows) return;

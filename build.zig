@@ -154,7 +154,7 @@ pub fn build(b: *std.Build) void {
     player_test.root_module.addImport("miniaudio", miniaudio_mod);
     player_test.root_module.addImport("platform", platform_mod);
     player_test.root_module.addImport("player", player_test_mod);
-    addMiniaudioCSources(b, player_test.root_module);
+    addMiniaudioCSources(b, player_test.root_module, target);
     linkPlatformLibs(b, player_test.root_module, target);
     test_step.dependOn(&b.addRunArtifact(player_test).step);
 }
@@ -189,7 +189,7 @@ fn configureModule(
 ) void {
     mod.addImport("miniaudio", miniaudio_mod);
     mod.addImport("platform", platform_mod);
-    addMiniaudioCSources(b, mod);
+    addMiniaudioCSources(b, mod, target);
     linkPlatformLibs(b, mod, target);
 }
 
@@ -228,12 +228,64 @@ fn addModuleTest(
 ///
 /// miniaudio 是纯 C 库，虽然通过 @cImport 翻译了头文件获得了类型定义和函数声明，
 /// 但实际的实现代码（miniaudio.c）仍需作为 C 源文件参与编译和链接。
-fn addMiniaudioCSources(b: *std.Build, mod: *std.Build.Module) void {
+///
+/// 根据目标平台设置不同的编译标志：
+/// - Android：启用 AAudio 和 OpenSL ES 后端支持
+fn addMiniaudioCSources(b: *std.Build, mod: *std.Build.Module, target: std.Build.ResolvedTarget) void {
+    const flags = if (target.result.os.tag == .android)
+        &.{
+            "-DMA_SUPPORT_AAUDIO=1",
+            "-DMA_SUPPORT_OPENSL=1",
+            "-DMA_NO_DECODING=0",
+        }
+    else
+        &.{};
+
     mod.addCSourceFile(.{
         .file = b.path("vendor/miniaudio/miniaudio.c"),
-        .flags = &.{},
+        .flags = flags,
     });
     mod.addIncludePath(b.path("vendor/miniaudio"));
+}
+
+/// 获取当前主机操作系统的字符串表示，用于 NDK 路径。
+fn getHostOsName() ?[]const u8 {
+    return switch (std.Target.current.os.tag) {
+        .linux => "linux-x86_64",
+        .macos => "darwin-x86_64",
+        .windows => "windows-x86_64",
+        else => null,
+    };
+}
+
+/// 获取 Android 目标架构的字符串表示，用于 NDK sysroot 路径。
+fn getAndroidArchName(target: std.Build.ResolvedTarget) ?[]const u8 {
+    return switch (target.result.cpu.arch) {
+        .aarch64 => "aarch64-linux-android",
+        .arm => "arm-linux-androideabi",
+        .x86_64 => "x86_64-linux-android",
+        .x86 => "i686-linux-android",
+        else => null,
+    };
+}
+
+/// 获取 Android NDK sysroot 路径。
+///
+/// 从环境变量中查找 NDK 路径，支持以下优先级：
+/// 1. ANDROID_NDK_HOME
+/// 2. NDK_HOME（setup-ndk action 设置的环境变量）
+fn getAndroidNdkSysroot(b: *std.Build) ?[]const u8 {
+    const host_os = getHostOsName() orelse return null;
+
+    if (b.graph.environ_map.get("ANDROID_NDK_HOME")) |ndk_home| {
+        return b.pathJoin(&.{ ndk_home, "toolchains/llvm/prebuilt", host_os, "sysroot" });
+    }
+
+    if (b.graph.environ_map.get("NDK_HOME")) |ndk_home| {
+        return b.pathJoin(&.{ ndk_home, "toolchains/llvm/prebuilt", host_os, "sysroot" });
+    }
+
+    return null;
 }
 
 /// 链接各平台所需的系统库。
@@ -244,6 +296,12 @@ fn addMiniaudioCSources(b: *std.Build, mod: *std.Build.Module) void {
 ///   - pthread：POSIX 线程库，用于异步音频回调
 ///   - m：数学库，音频处理中的数学运算
 ///   - dl：动态链接库，用于运行时加载音频驱动
+///
+/// - Android：
+///   - 继承 Linux 的基础库（pthread、m、dl）
+///   - log：Android 日志系统，用于 native 层日志输出
+///   - OpenSLES：Android 低延迟音频 API（API < 26）
+///   - aaudio：Android 现代音频 API（API >= 26）
 ///
 /// - Windows：
 ///   - winmm：Windows 多媒体 API
@@ -261,16 +319,28 @@ fn linkPlatformLibs(b: *std.Build, mod: *std.Build.Module, target: std.Build.Res
             mod.linkSystemLibrary("m", .{});
             mod.linkSystemLibrary("dl", .{});
         },
+        .android => {
+            if (getAndroidNdkSysroot(b)) |sysroot| {
+                mod.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ sysroot, "usr/include" }) });
+                if (getAndroidArchName(target)) |arch| {
+                    mod.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sysroot, "usr/lib", arch }) });
+                }
+                mod.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sysroot, "usr/lib" }) });
+            }
+
+            mod.linkSystemLibrary("pthread", .{});
+            mod.linkSystemLibrary("m", .{});
+            mod.linkSystemLibrary("dl", .{});
+            mod.linkSystemLibrary("log", .{});
+            mod.linkSystemLibrary("OpenSLES", .{});
+            mod.linkSystemLibrary("aaudio", .{});
+        },
         .windows => {
             mod.linkSystemLibrary("winmm", .{});
             mod.linkSystemLibrary("ole32", .{});
             mod.linkSystemLibrary("uuid", .{});
         },
         .macos => {
-            // macOS SDK 路径获取（优先级从高到低）：
-            // 1. getSdk：macOS 主机自动检测
-            // 2. SDKROOT 环境变量：交叉编译时手动指定
-            // 3. --sysroot 构建参数
             const sdk = sdk_blk: {
                 break :sdk_blk std.zig.system.darwin.getSdk(b.allocator, b.graph.io, &target.result) orelse b.graph.environ_map.get("SDKROOT") orelse b.sysroot;
             };
@@ -279,8 +349,6 @@ fn linkPlatformLibs(b: *std.Build, mod: *std.Build.Module, target: std.Build.Res
                 mod.addFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ path, "System/Library/Frameworks" }) });
                 mod.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ path, "usr/include" }) });
                 mod.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ path, "usr/lib" }) });
-                // Zig 交叉编译 macOS 时 -lc 链接的是 Zig 自带 libc，不含 iconv。
-                // 需要显式链接系统的 libiconv（SDK 的 usr/lib/libiconv.tbd）。
                 mod.linkSystemLibrary("iconv", .{});
                 mod.linkFramework("CoreAudio", .{});
                 mod.linkFramework("AudioToolbox", .{});
