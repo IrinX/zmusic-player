@@ -10,6 +10,7 @@
 //! - 平台特定的系统库（见 linkPlatformLibs）
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 /// 项目构建入口。
 ///
@@ -233,7 +234,7 @@ fn addModuleTest(
 /// - Android：启用 AAudio 和 OpenSL ES 后端支持
 fn addMiniaudioCSources(b: *std.Build, mod: *std.Build.Module, target: std.Build.ResolvedTarget) void {
     const is_android = target.result.abi == .android or target.result.abi == .androideabi;
-    const flags = if (is_android)
+    const flags: []const []const u8 = if (is_android)
         &.{
             "-DMA_SUPPORT_AAUDIO=1",
             "-DMA_SUPPORT_OPENSL=1",
@@ -251,7 +252,7 @@ fn addMiniaudioCSources(b: *std.Build, mod: *std.Build.Module, target: std.Build
 
 /// 获取当前主机操作系统的字符串表示，用于 NDK 路径。
 fn getHostOsName() ?[]const u8 {
-    return switch (std.Target.current.os.tag) {
+    return switch (builtin.target.os.tag) {
         .linux => "linux-x86_64",
         .macos => "darwin-x86_64",
         .windows => "windows-x86_64",
